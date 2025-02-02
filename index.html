@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Live Swapping Draggable HBox with Spacing</title>
+    <style>
+        .centered {
+            margin-top:auto;
+            margin-bottom:auto;
+            text-align:center;
+        }
+
+        canvas {
+            border: 1px solid #333;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+<div class="centered">
+    <div>
+        <canvas id="canvas" width="1000" height="500"></canvas>
+    </div>
+    <div>
+        <input type="checkbox" id="debugcheck" checked/>
+        <label for="debugcheck">Debug view</label>
+    </div>
+</div>
+<script>
+
+    class Item {
+        constructor(w, color) {
+            this.w = w;         // Target width of the item.
+            this.color = color;
+            this.x = 0;         // The x position computed by layout.
+            this.isDragging = false;
+        }
+    }
+
+    function paint_item(item, y, height, op = 1.0) {
+        ctx.globalAlpha = op
+        ctx.fillStyle = item.color;
+        ctx.fillRect(item.x, y, item.w, height);
+        ctx.strokeStyle = "black";
+        ctx.strokeRect(item.x, y, item.w, height);
+    }
+
+    class HBox {
+        constructor(items) {
+            this.items = items;
+            this.spacing = 8;  // Spacing between items.
+        }
+
+        layout_items() {
+            let x = 0;
+            for (let item of this.items) {
+                item.x = x;
+                x += item.w + this.spacing;
+            }
+        }
+    }
+
+    // ------------------------------
+    // Nothing happens here but drawing, feel free to ignore
+    // ------------------------------
+    function draw_screen(ctx, items, y, height) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        for (let item of items) // paint non dragged first so that drag is always drawn above
+            if (!item.isDragging)
+                paint_item(item, y, height)
+        let any_dragged = false
+        let drag_index = 0;
+        for (let item of items) {
+            if (item.isDragging) {
+                any_dragged = true
+                paint_item(item, y, height)
+
+                if (document.getElementById("debugcheck").checked) {
+                    ctx.strokeStyle = "black";
+                    ctx.beginPath();
+                    ctx.moveTo(item.x, y + height + 20);
+                    ctx.lineTo(item.x, canvas.height);
+                    ctx.stroke();
+                }
+                break;
+            }
+            drag_index++;
+        }
+
+        if (any_dragged && document.getElementById("debugcheck").checked) { // Visualize all the sort orders possible
+            let remaining = hbox.items.filter(item => item !== draggedItem);
+            for (let i = 0; i < remaining.length + 1; i++) {
+                const h = new HBox([...remaining]);
+                h.items.splice(i, 0, new Item(draggedItem.w, draggedItem.color));
+                h.layout_items()
+                let has_closest = false;
+                for (let item of h.items)
+                    if (draggedItem.color === item.color && i === drag_index)
+                        has_closest = true
+                for (let item of h.items) {
+                    let vis_y = i * (y) + y * 3;
+                    if (draggedItem.color === item.color) { // also has to be closest
+                        ctx.strokeStyle = "black";
+                        ctx.beginPath();
+                        ctx.moveTo(item.x, vis_y);
+                        ctx.lineTo(item.x, y + height + 20);
+                        ctx.stroke();
+                    }
+                    if (has_closest) {
+                        paint_item(item, vis_y, height, 1.0);
+                    } else {
+                        paint_item(item, vis_y, height, .3);
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------
+    // Global Setup
+    // ------------------------------
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const boxesY = 50;
+    const boxesHeight = 40;
+
+    // Define target widths and colors.
+    const widths = [100, 200, 40, 60, 40, 130];
+    const colors = ['red', 'green', 'blue', 'orange', 'purple', 'cyan'];
+    const items = widths.map((w, i) => new Item(w, colors[i % colors.length]));
+
+    const hbox = new HBox(items);
+    hbox.layout_items();
+    draw_screen(ctx, hbox.items, boxesY, boxesHeight);
+
+    // ------------------------------
+    // Dragging State Variables
+    // ------------------------------
+    let draggedItem = null;
+    let initialClickOffsetForDragX = 0;  // Difference between mouse x and the left edge of the dragged item.
+
+    function getMousePos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        return {x: evt.clientX - rect.left, y: evt.clientY - rect.top};
+    }
+
+    // mousedown: Identify if an item is clicked.
+    canvas.addEventListener("mousedown", function (evt) {
+        const pos = getMousePos(evt);
+        // Check each item using its computed layout x.
+        for (let item of hbox.items) {
+            if (pos.x >= item.x &&
+                pos.x <= item.x + item.w &&
+                pos.y >= boxesY &&
+                pos.y <= boxesY + boxesHeight) {
+                draggedItem = item;
+                draggedItem.isDragging = true;
+                // Record the offset so that the box does not jump.
+                initialClickOffsetForDragX = pos.x - item.x;
+                break;
+            }
+        }
+    });
+
+    // mousemove: Update the drag and perform the live swap algorithm.
+    canvas.addEventListener("mousemove", function (evt) {
+        if (!draggedItem) return;
+
+        const mousePos = getMousePos(evt);
+        const boxLeftX = mousePos.x - initialClickOffsetForDragX;
+
+        // --- Swap Algorithm ---
+        // Create a simulated copy of the hbox ordering *without* the dragged item.
+        let remaining = hbox.items.filter(item => item !== draggedItem);
+
+        // Try every possible insertion index from 0 to remaining.length.
+        let bestIndex = 0;
+        let smallestDistance = Infinity;
+        for (let i = 0; i < remaining.length + 1; i++) {
+            const h = new HBox([...remaining]); // Create a new copy of hbox
+            h.items.splice(i, 0, new Item(draggedItem.w, draggedItem.color));
+            h.layout_items()
+            const distanceFromSlot = Math.abs(boxLeftX - h.items[i].x);
+            if (distanceFromSlot < smallestDistance) {
+                smallestDistance = distanceFromSlot;
+                bestIndex = i;
+            }
+        }
+
+        // Now find the current index of the dragged item in the real hbox ordering.
+        const currentIndex = hbox.items.indexOf(draggedItem);
+        if (bestIndex !== currentIndex) {
+            hbox.items.splice(currentIndex, 1);
+            hbox.items.splice(bestIndex, 0, draggedItem);
+        }
+
+        // Recalculate layout for the entire hbox using the spacing.
+        hbox.layout_items();
+
+        // To keep the drag (so the dragged item appears to follow the mouse),
+        // override its computed layout position with the projected value.
+        // (This only affects drawing; the element ordering remains correct.)
+        draggedItem.x = boxLeftX;
+
+        // Draw the updated hbox.
+        draw_screen(ctx, hbox.items, boxesY, boxesHeight);
+    });
+
+    function endDrag() {
+        if (draggedItem) {
+            draggedItem.isDragging = false;
+            // Run a final layout so the dragged item snaps into its slot.
+            hbox.layout_items();
+            draw_screen(ctx, hbox.items, boxesY, boxesHeight);
+            draggedItem = null;
+        }
+    }
+
+    // mouseup: End the drag and let the layout "snap" the dragged item into place.
+    canvas.addEventListener("mouseup", function () {
+        endDrag();
+    });
+
+    canvas.addEventListener("mouseleave", function () {
+        endDrag();
+    });
+</script>
+</body>
+</html>
+
